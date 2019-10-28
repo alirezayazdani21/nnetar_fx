@@ -1,0 +1,115 @@
+
+###########################################
+library(quantmod)
+library(PerformanceAnalytics)
+library(dplyr)
+library(MLmetrics)
+library(Metrics)
+library(caret)
+library(forecast)
+library(doParallel)
+#library(tseries)
+###########################################
+getSymbols("DEXJPUS",src='FRED')#USDJPY EXCHANGE RATE DAILY
+
+#USD
+getSymbols("SP500",src='FRED')#SP500 DAILY 
+getSymbols("DGS3MO",src='FRED')#3MONTH DAILY
+getSymbols("DGS2",src='FRED')#2YEAR DAILY
+
+#JPY
+getSymbols("NIKKEI225",src='FRED')#Nikkei225 DAILY
+getSymbols("JPY1MTD156N",src='FRED')#1M LIBOR,JPY DAILY
+getSymbols("JPY3MTD156N",src='FRED')#3M LIBOR,JPY DAILY
+
+#GLOBAL
+getSymbols("TEDRATE",src='FRED')#TED SPREAD DAILY
+getSymbols("DCOILWTICO",src='FRED')#WTI OIL DAILY
+getSymbols("VIXCLS",src='FRED')#VOLATILITY DAILY
+
+#SOME TRANSFORMS
+TO_PC<-na.locf(merge.xts(DEXJPUS,SP500,NIKKEI225,DCOILWTICO))['2018/2019-07-31']
+TO_PC<-na.omit(Return.calculate(TO_PC, method = "discrete"))
+
+TO_DIFF<-na.locf(merge.xts(DGS3MO,DGS2,JPY1MTD156N,JPY3MTD156N,TEDRATE,VIXCLS))['2018/2019-07-31']
+TO_DIFF<-na.omit(Return.calculate(TO_DIFF, method = "difference"))
+
+DT<-cbind.xts(TO_PC,TO_DIFF)
+
+VOL=abs(lag.xts(DT[,1]))
+colnames(VOL)<-"VOL"
+
+DTM<-na.omit(cbind.xts(TO_PC$DEXJPUS,lag.xts(DT[,-1]),VOL))
+
+EQRETSPR <- DTM$SP500-DTM$NIKKEI225
+colnames(EQRETSPR)<-"EQRETSPR"
+
+DTM<-cbind(DTM,EQRETSPR)
+
+ts.plot(DTM$DEXJPUS)
+
+Training<-DTM['2018/2019-05-30']
+Test<-DTM['2019-05-30/']
+
+y_tr<-Training$DEXJPUS
+#x_tr<-Training[,-1]
+x_tr<-Training[,c("SP500","NIKKEI225","VOL")]
+
+
+y_te<-Test$DEXJPUS
+#x_te<-Test[,-1]
+x_te<-Test[,c("SP500","NIKKEI225","VOL")]
+############################################################
+############################################################
+############################################################
+#1st method using forecast lib
+set.seed(1234567)
+nnetar_fit<-nnetar(y_tr,
+                   xreg=x_tr,
+                   p=10,
+                   #P=7,
+                   size=20,#20
+                   repeats=150,
+                   lambda="auto",
+                   scale.inputs=T
+                   )
+nnetar_fit
+accuracy(nnetar_fit)
+
+pred_tr<-na.fill(as.data.frame(as.numeric(nnetar_fit$fitted)),0)
+colnames(pred_tr)<-"nnetar_y"
+
+pred_te<-na.fill(as.data.frame((forecast(nnetar_fit,h=nrow(y_te),xreg=x_te))),0)
+colnames(pred_te)<-"nnetar_y"
+
+ts.plot(y_tr)
+lines(pred_tr,col="red")
+
+ts.plot(y_te)
+lines(pred_te,col="red")
+abline(h=0,col="lightblue")
+
+#SOME FIT METRICS
+#mase(y_tr[,1],pred_tr)
+rmse(y_tr[,1],pred_tr)
+cor(y_tr[,1],pred_tr)^2
+Accuracy(sign(y_tr[,1]),sign(pred_tr))
+auc(sign(y_tr[,1]),sign(pred_tr))
+
+#mase(y_te[,1],pred_te)
+rmse(y_te[,1],pred_te)
+cor(y_te[,1],pred_te)^2
+Accuracy(sign(y_te[,1]),sign(pred_te))
+auc(sign(y_te[,1]),sign(pred_te))
+
+nnetar_pred_all<-rbind.data.frame(pred_tr,pred_te)
+
+ts.plot(DT$DEXJPUS)
+lines(nnetar_pred_all,col="red")
+
+ts.plot(cumsum(DT$DEXJPUS))
+lines(cumsum(nnetar_pred_all)-0.05,col="red")
+
+############################################################
+############################################################
+############################################################
